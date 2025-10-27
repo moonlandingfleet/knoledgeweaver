@@ -1,10 +1,12 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { AnalysisTask, Source, Persona } from './types';
+import React, { useCallback, useEffect } from 'react';
+import { useStore } from './store/useStore';
+import { getPersonas, savePersonas, getKnowledgeSources, saveKnowledgeSources } from './services/db';
 import { startChatSession, sendMessageStreamToChat, runQualityCheck, askPersonaQuestion } from './services/geminiService';
-import ControlPanel from './components/ControlPanel';
+import SetupPanel from './components/SetupPanel';
 import DocumentEditor from './components/DocumentEditor';
 import FeedbackPanel from './components/FeedbackPanel';
 import QualityReport from './components/QualityReport';
+import MainLayout from './components/MainLayout';
 import SparkleIcon from './components/icons/SparkleIcon';
 import PersonaManager from './components/PersonaManager';
 import DataManager from './components/DataManager';
@@ -27,28 +29,32 @@ import { StructuredDocumentService } from './services/structuredDocumentService'
 // import type { ChatSession } from '@google/generative-ai';
 
 const App: React.FC = () => {
-  const [savedPersonas, setSavedPersonas] = useState<Persona[]>([]);
-  const [activePersonaId, setActivePersonaId] = useState<string | null>(null);
-  const [knowledgeSources, setKnowledgeSources] = useState<Source[]>([]);
-  
-  const [temperature, setTemperature] = useState<number>(0.5);
-  const [feedback, setFeedback] = useState<string>('');
-  
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [isRefining, setIsRefining] = useState<boolean>(false);
-  const [isCheckingQuality, setIsCheckingQuality] = useState<boolean>(false);
-  const [isAskingQuestion, setIsAskingQuestion] = useState<boolean>(false);
-  const [isPersonaManagerOpen, setIsPersonaManagerOpen] = useState<boolean>(false);
-  const [isDataManagerOpen, setIsDataManagerOpen] = useState<boolean>(false);
-  const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
-  const [isAnalyticsOpen, setIsAnalyticsOpen] = useState<boolean>(false);
-  const [isGuidanceOpen, setIsGuidanceOpen] = useState<boolean>(false);
-  const [isKnowledgeQualityOpen, setIsKnowledgeQualityOpen] = useState<boolean>(false);
+  const {
+    personas,
+    activePersonaId,
+    knowledgeSources,
+    generatedContent,
+    setPersonas,
+    setActivePersonaId,
+    setKnowledgeSources,
+    setGeneratedContent,
+  } = useStore();
 
-  const [generatedContent, setGeneratedContent] = useState<string>('');
-  const [qualityReport, setQualityReport] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [chatSession, setChatSession] = useState<any | null>(null);
+  const [temperature, setTemperature] = React.useState<number>(0.5);
+  const [feedback, setFeedback] = React.useState<string>('');
+  const [isLoading, setIsLoading] = React.useState<boolean>(false);
+  const [isRefining, setIsRefining] = React.useState<boolean>(false);
+  const [isCheckingQuality, setIsCheckingQuality] = React.useState<boolean>(false);
+  const [isAskingQuestion, setIsAskingQuestion] = React.useState<boolean>(false);
+  const [isPersonaManagerOpen, setIsPersonaManagerOpen] = React.useState<boolean>(false);
+  const [isDataManagerOpen, setIsDataManagerOpen] = React.useState<boolean>(false);
+  const [isSearchOpen, setIsSearchOpen] = React.useState<boolean>(false);
+  const [isAnalyticsOpen, setIsAnalyticsOpen] = React.useState<boolean>(false);
+  const [isGuidanceOpen, setIsGuidanceOpen] = React.useState<boolean>(false);
+  const [isKnowledgeQualityOpen, setIsKnowledgeQualityOpen] = React.useState<boolean>(false);
+  const [qualityReport, setQualityReport] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [chatSession, setChatSession] = React.useState<any | null>(null);
 
   const analyticsService = AnalyticsService.getInstance();
   const evolutionService = DocumentEvolutionService.getInstance();
@@ -60,28 +66,25 @@ const App: React.FC = () => {
   const documentEditingService = DocumentEditingService.getInstance();
   const structuredDocumentService = StructuredDocumentService.getInstance();
 
-  // Load personas from localStorage on initial render
   useEffect(() => {
-    try {
-      const storedPersonas = localStorage.getItem('knowledge-weaver-personas');
-      if (storedPersonas) {
-        setSavedPersonas(JSON.parse(storedPersonas));
-      }
-    } catch (e) {
-      console.error("Failed to load personas from localStorage", e);
-    }
-  }, []);
+    const loadData = async () => {
+      const personas = await getPersonas();
+      setPersonas(personas);
+      const knowledgeSources = await getKnowledgeSources();
+      setKnowledgeSources(knowledgeSources);
+    };
+    loadData();
+  }, [setPersonas, setKnowledgeSources]);
 
-  // Save personas to localStorage whenever they change
   useEffect(() => {
-    try {
-      localStorage.setItem('knowledge-weaver-personas', JSON.stringify(savedPersonas));
-    } catch (e) {
-      console.error("Failed to save personas to localStorage", e);
-    }
-  }, [savedPersonas]);
+    savePersonas(personas);
+  }, [personas]);
 
-  const activePersona = savedPersonas.find(p => p.id === activePersonaId) || null;
+  useEffect(() => {
+    saveKnowledgeSources(knowledgeSources);
+  }, [knowledgeSources]);
+
+  const activePersona = personas.find((p) => p.id === activePersonaId) || null;
 
   const handleStream = async (stream: AsyncGenerator<string, void, unknown>) => {
     let fullText = '';
@@ -116,7 +119,7 @@ const App: React.FC = () => {
       analyticsService.trackEvent({
         type: 'document_generated',
         timestamp: new Date().toISOString(),
-        metadata: { persona: activePersona.name, sourceCount: knowledgeSources.length }
+        metadata: { persona: activePersona.name, sourceCount: knowledgeSources.length },
       });
 
       let fullContent = '';
@@ -125,16 +128,14 @@ const App: React.FC = () => {
         setGeneratedContent(fullContent);
       }
 
-      // Create initial snapshot after generation
       if (fullContent.trim()) {
         const snapshot = await evolutionService.createSnapshot(activePersona, fullContent, '', 1);
         const updatedPersona = {
           ...activePersona,
-          documentSnapshots: [snapshot]
+          documentSnapshots: [snapshot],
         };
-        setSavedPersonas(prev => prev.map(p => p.id === activePersona.id ? updatedPersona : p));
+        setPersonas(personas.map((p) => (p.id === activePersona.id ? updatedPersona : p)));
       }
-
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
       setError(errorMessage);
@@ -142,7 +143,7 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [activePersona, knowledgeSources, temperature, analyticsService, evolutionService]);
+  }, [activePersona, knowledgeSources, temperature, analyticsService, evolutionService, personas, setPersonas, setGeneratedContent]);
 
   const handleRefine = useCallback(async () => {
     if (!activePersona) {
@@ -160,13 +161,12 @@ const App: React.FC = () => {
       const previousContent = generatedContent;
       const refinementStream = sendMessageStreamToChat(feedback, generatedContent);
 
-      // Track refinement feedback
       feedbackService.trackRefinementFeedback(feedback, activePersona.id, activePersona.id);
 
       analyticsService.trackEvent({
         type: 'document_refined',
         timestamp: new Date().toISOString(),
-        metadata: { feedbackLength: feedback.length, contentLength: generatedContent.length }
+        metadata: { feedbackLength: feedback.length, contentLength: generatedContent.length },
       });
 
       let fullContent = '';
@@ -175,25 +175,29 @@ const App: React.FC = () => {
         setGeneratedContent(fullContent);
       }
 
-      // Create snapshot after refinement
       if (fullContent.trim() && activePersona.documentSnapshots) {
         const version = (activePersona.documentSnapshots.length || 0) + 1;
-        const snapshot = await evolutionService.createSnapshot(activePersona, fullContent, previousContent, version);
+        const snapshot = await evolutionService.createSnapshot(
+          activePersona,
+          fullContent,
+          previousContent,
+          version
+        );
         const updatedPersona = {
           ...activePersona,
-          documentSnapshots: [...(activePersona.documentSnapshots || []), snapshot]
+          documentSnapshots: [...(activePersona.documentSnapshots || []), snapshot],
         };
-        setSavedPersonas(prev => prev.map(p => p.id === activePersona.id ? updatedPersona : p));
+        setPersonas(personas.map((p) => (p.id === activePersona.id ? updatedPersona : p)));
       }
 
-      setFeedback(''); // Clear feedback after successful refinement
+      setFeedback('');
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
       setError(errorMessage);
     } finally {
       setIsRefining(false);
     }
-  }, [activePersona, feedback, generatedContent, analyticsService, evolutionService, feedbackService]);
+  }, [activePersona, feedback, generatedContent, analyticsService, evolutionService, feedbackService, personas, setPersonas, setGeneratedContent]);
 
   const handleQualityCheck = useCallback(async () => {
     if (!generatedContent) {
@@ -210,26 +214,29 @@ const App: React.FC = () => {
       const report = await runQualityCheck(generatedContent, activePersona);
       setQualityReport(report);
 
-      // Parse and track quality assessment
       const assessment = parseQualityAssessment(report, activePersona);
       if (assessment) {
         analyticsService.trackQualityAssessment(assessment);
-        
-        // Track quality check feedback with metrics
+
         const qualityMetrics: EditQualityMetrics = {
           clarity: assessment.personaConsistency,
           accuracy: assessment.knowledgeIntegration,
           relevance: assessment.responseRelevance,
-          overall: assessment.overallQuality
+          overall: assessment.overallQuality,
         };
-        
-        feedbackService.trackQualityCheckFeedback(report, qualityMetrics, activePersona.id, activePersona.id);
+
+        feedbackService.trackQualityCheckFeedback(
+          report,
+          qualityMetrics,
+          activePersona.id,
+          activePersona.id
+        );
       }
 
       analyticsService.trackEvent({
         type: 'quality_check',
         timestamp: new Date().toISOString(),
-        metadata: { contentLength: generatedContent.length, persona: activePersona.name }
+        metadata: { contentLength: generatedContent.length, persona: activePersona.name },
       });
     } catch (e: unknown) {
       const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
@@ -239,7 +246,7 @@ const App: React.FC = () => {
     }
   }, [generatedContent, activePersona, analyticsService, feedbackService]);
 
-  const parseQualityAssessment = (report: string, persona: Persona): QualityAssessment | null => {
+  const parseQualityAssessment = (report: string, persona: any): QualityAssessment | null => {
     try {
       const lines = report.split('\n');
       let personaConsistency = 0;
@@ -247,7 +254,7 @@ const App: React.FC = () => {
       let responseRelevance = 0;
       let overallQuality = 0;
 
-      lines.forEach(line => {
+      lines.forEach((line) => {
         const consistencyMatch = line.match(/PERSONA CONSISTENCY:\s*(\d+)\/100/);
         if (consistencyMatch) personaConsistency = parseInt(consistencyMatch[1]);
 
@@ -267,7 +274,7 @@ const App: React.FC = () => {
         responseRelevance,
         overallQuality,
         timestamp: new Date().toISOString(),
-        sessionId: analyticsService.getCurrentSessionId()
+        sessionId: analyticsService.getCurrentSessionId(),
       };
     } catch (error) {
       console.error('Failed to parse quality assessment:', error);
@@ -275,118 +282,133 @@ const App: React.FC = () => {
     }
   };
 
-  const handleGenerateFromPrompt = useCallback(async (prompt: string) => {
-    if (!activePersona) {
-      setError('Please select or create a persona first.');
-      return;
-    }
-    if (knowledgeSources.length === 0) {
-      setError('Please add sources to the Knowledge Base before generating content.');
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-    setGeneratedContent('');
-    setChatSession(null);
-
-    try {
-      const generatedContent = await structuredDocumentService.generateDocumentFromSources(
-        knowledgeSources,
-        prompt,
-        activePersona
-      );
-
-      setGeneratedContent(generatedContent);
-
-      // Create initial snapshot after generation
-      if (generatedContent.trim()) {
-        const snapshot = await evolutionService.createSnapshot(activePersona, generatedContent, '', 1);
-        const updatedPersona = {
-          ...activePersona,
-          documentSnapshots: [snapshot]
-        };
-        setSavedPersonas(prev => prev.map(p => p.id === activePersona.id ? updatedPersona : p));
-      }
-
-      analyticsService.trackEvent({
-        type: 'document_generated',
-        timestamp: new Date().toISOString(),
-        metadata: { persona: activePersona.name, sourceCount: knowledgeSources.length, prompt }
-      });
-
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
-      setError(errorMessage);
-      setChatSession(null);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [activePersona, knowledgeSources, analyticsService, evolutionService, structuredDocumentService]);
-
-  const handleAskQuestion = useCallback(async (question: string) => {
-    if (!activePersona) {
-      setError('Please select or create a persona first.');
-      return;
-    }
-    if (knowledgeSources.length === 0) {
-      setError('Please add sources to the Knowledge Base before asking questions.');
-      return;
-    }
-    if (!chatSession) {
-      // Create a chat session if one doesn't exist
-      try {
-        startChatSession(activePersona, 'Start a conversation to answer questions based on the provided knowledge sources.', knowledgeSources, temperature);
-        setChatSession({}); // Placeholder - we'll need to modify the service to return chat session
-      } catch (e: unknown) {
-        const errorMessage = e instanceof Error ? e.message : 'Failed to create chat session.';
-        setError(errorMessage);
+  const handleGenerateFromPrompt = useCallback(
+    async (prompt: string) => {
+      if (!activePersona) {
+        setError('Please select or create a persona first.');
         return;
       }
-    }
+      if (knowledgeSources.length === 0) {
+        setError('Please add sources to the Knowledge Base before generating content.');
+        return;
+      }
+      setIsLoading(true);
+      setError(null);
+      setGeneratedContent('');
+      setChatSession(null);
 
-    setIsAskingQuestion(true);
-    setError(null);
+      try {
+        const generatedContent = await structuredDocumentService.generateDocumentFromSources(
+          knowledgeSources,
+          prompt,
+          activePersona
+        );
 
-    try {
-      if (chatSession) {
-        const responseStream = askPersonaQuestion(activePersona, knowledgeSources, question);
+        setGeneratedContent(generatedContent);
+
+        if (generatedContent.trim()) {
+          const snapshot = await evolutionService.createSnapshot(
+            activePersona,
+            generatedContent,
+            '',
+            1
+          );
+          const updatedPersona = {
+            ...activePersona,
+            documentSnapshots: [snapshot],
+          };
+          setPersonas(personas.map((p) => (p.id === activePersona.id ? updatedPersona : p)));
+        }
 
         analyticsService.trackEvent({
-          type: 'persona_question',
+          type: 'document_generated',
           timestamp: new Date().toISOString(),
-          metadata: {
-            persona: activePersona.name,
-            questionLength: question.length,
-            sourceCount: knowledgeSources.length
-          }
+          metadata: { persona: activePersona.name, sourceCount: knowledgeSources.length, prompt },
         });
-
-        await handleStream(responseStream);
+      } catch (e: unknown) {
+        const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
+        setError(errorMessage);
+        setChatSession(null);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e: unknown) {
-      const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
-      setError(errorMessage);
-    } finally {
-      setIsAskingQuestion(false);
-    }
-  }, [activePersona, knowledgeSources, temperature, chatSession, analyticsService]);
-  
+    },
+    [activePersona, knowledgeSources, analyticsService, evolutionService, structuredDocumentService, personas, setPersonas, setGeneratedContent]
+  );
+
+  const handleAskQuestion = useCallback(
+    async (question: string) => {
+      if (!activePersona) {
+        setError('Please select or create a persona first.');
+        return;
+      }
+      if (knowledgeSources.length === 0) {
+        setError('Please add sources to the Knowledge Base before asking questions.');
+        return;
+      }
+      if (!chatSession) {
+        try {
+          startChatSession(
+            activePersona,
+            'Start a conversation to answer questions based on the provided knowledge sources.',
+            knowledgeSources,
+            temperature
+          );
+          setChatSession({});
+        } catch (e: unknown) {
+          const errorMessage = e instanceof Error ? e.message : 'Failed to create chat session.';
+          setError(errorMessage);
+          return;
+        }
+      }
+
+      setIsAskingQuestion(true);
+      setError(null);
+
+      try {
+        if (chatSession) {
+          const responseStream = askPersonaQuestion(activePersona, knowledgeSources, question);
+
+          analyticsService.trackEvent({
+            type: 'persona_question',
+            timestamp: new Date().toISOString(),
+            metadata: {
+              persona: activePersona.name,
+              questionLength: question.length,
+              sourceCount: knowledgeSources.length,
+            },
+          });
+
+          await handleStream(responseStream);
+        }
+      } catch (e: unknown) {
+        const errorMessage = e instanceof Error ? e.message : 'An unexpected error occurred.';
+        setError(errorMessage);
+      } finally {
+        setIsAskingQuestion(false);
+      }
+    },
+    [activePersona, knowledgeSources, temperature, chatSession, analyticsService, setGeneratedContent]
+  );
+
   const handleReset = useCallback(() => {
     setGeneratedContent('');
     setFeedback('');
     setChatSession(null);
     setError(null);
     setKnowledgeSources([]);
-  }, []);
+  }, [setGeneratedContent, setKnowledgeSources]);
 
-  const handleImportData = useCallback((personas: Persona[], knowledgeSources: Source[]) => {
-    setSavedPersonas(personas);
-    setKnowledgeSources(knowledgeSources);
-    setActivePersonaId(null);
-    handleReset();
-  }, [handleReset]);
+  const handleImportData = useCallback(
+    (personas, knowledgeSources) => {
+      setPersonas(personas);
+      setKnowledgeSources(knowledgeSources);
+      setActivePersonaId(null);
+      handleReset();
+    },
+    [setPersonas, setKnowledgeSources, setActivePersonaId, handleReset]
+  );
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -417,7 +439,16 @@ const App: React.FC = () => {
             className="px-3 py-2 bg-slate-700 text-slate-200 font-semibold rounded-md hover:bg-slate-600 transition-colors text-sm flex items-center gap-2"
             title="Search (Ctrl+K)"
           >
-            <svg className="w-4 h-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              className="w-4 h-4"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <circle cx="11" cy="11" r="8"></circle>
               <path d="m21 21-4.35-4.35"></path>
             </svg>
@@ -452,17 +483,17 @@ const App: React.FC = () => {
           </button>
         </div>
       </header>
-      <main className="flex-grow grid grid-cols-1 md:grid-cols-12 gap-6 lg:gap-8">
-        <div className="md:col-span-4 lg:col-span-3 flex flex-col">
-          <ControlPanel
+      <MainLayout
+        controlPanel={
+          <SetupPanel
             activePersona={activePersona}
             onManagePersonas={() => setIsPersonaManagerOpen(true)}
             knowledgeSources={knowledgeSources}
             setKnowledgeSources={setKnowledgeSources}
             isLoading={isLoading || isRefining || isCheckingQuality || isAskingQuestion}
           />
-        </div>
-        <div className="md:col-span-8 lg:col-span-6 flex flex-col">
+        }
+        documentEditor={
           <DocumentEditor
             content={generatedContent}
             setContent={setGeneratedContent}
@@ -474,9 +505,10 @@ const App: React.FC = () => {
             activePersonaId={activePersonaId}
             activePersona={activePersona}
             knowledgeSources={knowledgeSources}
+            snapshots={activePersona?.documentSnapshots || []}
           />
-        </div>
-        <div className="md:col-span-12 lg:col-span-3 flex flex-col">
+        }
+        feedbackPanel={
           <FeedbackPanel
             temperature={temperature}
             setTemperature={setTemperature}
@@ -495,27 +527,22 @@ const App: React.FC = () => {
             isPersonaActive={!!activePersona}
             hasDocument={!!generatedContent}
           />
-        </div>
-      </main>
+        }
+      />
       {isPersonaManagerOpen && (
         <PersonaManager
-            personas={savedPersonas}
-            setPersonas={setSavedPersonas}
-            activePersonaId={activePersonaId}
-            setActivePersonaId={setActivePersonaId}
-            knowledgeSources={knowledgeSources}
-            onClose={() => setIsPersonaManagerOpen(false)}
+          personas={personas}
+          setPersonas={setPersonas}
+          activePersonaId={activePersonaId}
+          setActivePersonaId={setActivePersonaId}
+          knowledgeSources={knowledgeSources}
+          onClose={() => setIsPersonaManagerOpen(false)}
         />
       )}
-      {qualityReport && (
-        <QualityReport 
-            report={qualityReport} 
-            onClose={() => setQualityReport(null)} 
-        />
-      )}
+      {qualityReport && <QualityReport report={qualityReport} onClose={() => setQualityReport(null)} />}
       {isDataManagerOpen && (
         <DataManager
-          personas={savedPersonas}
+          personas={personas}
           knowledgeSources={knowledgeSources}
           onImport={handleImportData}
           onClose={() => setIsDataManagerOpen(false)}
@@ -523,14 +550,14 @@ const App: React.FC = () => {
       )}
       {isSearchOpen && (
         <SearchModal
-          personas={savedPersonas}
+          personas={personas}
           knowledgeSources={knowledgeSources}
           onSelectPersona={(personaId) => {
             setActivePersonaId(personaId);
             analyticsService.trackEvent({
               type: 'search_performed',
               timestamp: new Date().toISOString(),
-              metadata: { personaSelected: personaId }
+              metadata: { personaSelected: personaId },
             });
           }}
           onClose={() => setIsSearchOpen(false)}
@@ -538,17 +565,13 @@ const App: React.FC = () => {
       )}
       {isAnalyticsOpen && (
         <AnalyticsDashboard
-          personas={savedPersonas}
+          personas={personas}
           knowledgeSources={knowledgeSources}
           generatedContent={generatedContent}
           onClose={() => setIsAnalyticsOpen(false)}
         />
       )}
-      {isKnowledgeQualityOpen && (
-        <KnowledgeQualityDashboard
-          onClose={() => setIsKnowledgeQualityOpen(false)}
-        />
-      )}
+      {isKnowledgeQualityOpen && <KnowledgeQualityDashboard onClose={() => setIsKnowledgeQualityOpen(false)} />}
       {isGuidanceOpen && activePersona && (
         <DevelopmentGuidancePanel
           persona={activePersona}
